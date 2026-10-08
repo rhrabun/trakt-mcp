@@ -1,0 +1,61 @@
+# trakt-mcp
+
+An MCP server that exposes a Trakt account to an agent: watch history, ratings,
+watchlist, series and write access.
+
+## Credentials
+
+Read from files whose paths come from the environment:
+
+- `TRAKT_CLIENT_ID_PATH` (default `trakt_client_id`) - the PKCE app's client id (no client
+  secret exists).
+- `TRAKT_TOKEN_PATH` (default `trakt_token.json`) - OAuth token; refreshed automatically
+  when it is within an hour of expiring, and retried once on a 401.
+
+## Tools
+
+| Tool | Purpose |
+|------|---------|
+| `trakt_watched_movies` | Movies watched, newest first, with dates |
+| `trakt_movie_ratings` | Ratings 1-10 (half-stars land on odd numbers) |
+| `trakt_watchlist` | Planned watches |
+| `trakt_watched_shows` | Series with play counts and last-watched date |
+| `trakt_search` | Resolve a name to a `trakt_id` before writing |
+| `trakt_rate_movie` | Rate by title; takes stars (0.5-5) |
+| `trakt_mark_watched` | Log a watch on a date; twice records a rewatch |
+| `trakt_watchlist_add` / `trakt_watchlist_remove` | Watchlist edits |
+| `trakt_recommendations` | Trakt's own suggestions from the history |
+| `trakt_stats` | Counts and average rating |
+
+## Notes
+
+- `/users/me/stats` can return an empty body, so `trakt_stats` computes from the raw
+  lists instead.
+- Trakt ratings are 1-10 whole numbers. The write tools take stars and convert.
+
+## Setup
+
+Requires [uv](https://docs.astral.sh/uv/).
+
+```sh
+uv sync
+uv run python test_server.py   # self-check on the pure helpers
+uv run python smoke.py         # live end-to-end check over stdio
+```
+
+## Registration
+
+```json
+{
+  "mcpServers": {
+    "trakt": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/trakt-mcp", "python", "server.py"],
+      "env": {
+        "TRAKT_CLIENT_ID_PATH": "/path/to/trakt_client_id",
+        "TRAKT_TOKEN_PATH": "/path/to/trakt_token.json"
+      }
+    }
+  }
+}
+```
