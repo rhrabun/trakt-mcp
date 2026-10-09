@@ -214,6 +214,52 @@ def trakt_watched_shows(limit: int = 300) -> str:
 
 
 @mcp.tool()
+def trakt_up_next(limit: int = 100, include_completed: bool = False) -> str:
+    """The next unwatched episode for each show, newest activity first. One call
+    covers every show. Set include_completed to also list finished shows."""
+    params = [f"limit={limit}"] if limit else []
+    if not include_completed:
+        params.append("hide_completed=true")
+    qs = "?" + "&".join(params) if params else ""
+    status, rows = _request("GET", "/sync/progress/watched" + qs)
+    if status != 200:
+        return json.dumps({"error": status, "detail": rows})
+    shows = []
+    for r in rows or []:
+        show = r.get("show") or {}
+        prog = r.get("progress") or {}
+        nxt = prog.get("next_episode")
+        if not nxt and not include_completed:
+            continue
+        shows.append(
+            _scrub(
+                {
+                    "title": show.get("title"),
+                    "year": show.get("year"),
+                    "trakt_id": (show.get("ids") or {}).get("trakt"),
+                    "aired": prog.get("aired"),
+                    "completed": prog.get("completed"),
+                    "last_watched_at": prog.get("last_watched_at"),
+                    "next_episode": (
+                        _scrub(
+                            {
+                                "season": nxt.get("season"),
+                                "number": nxt.get("number"),
+                                "title": nxt.get("title"),
+                                "trakt_id": (nxt.get("ids") or {}).get("trakt"),
+                            }
+                        )
+                        if nxt
+                        else None
+                    ),
+                }
+            )
+        )
+    shows.sort(key=lambda s: s.get("last_watched_at") or "", reverse=True)
+    return json.dumps({"count": len(shows), "shows": shows}, indent=1)
+
+
+@mcp.tool()
 def trakt_search(query: str, kind: str = "movie") -> str:
     """Search Trakt for a movie or show. kind is 'movie' or 'show'.
     Use to resolve a name to its trakt_id before any write."""

@@ -32,6 +32,9 @@ async def main() -> None:
             shows = await session.call_tool("trakt_watched_shows", {"limit": 3})
             print("\ntrakt_watched_shows(3):", shows.content[0].text)
 
+            upnext = await session.call_tool("trakt_up_next", {"limit": 3})
+            print("\ntrakt_up_next(3):", upnext.content[0].text)
+
 
 if __name__ == "__main__":
     try:

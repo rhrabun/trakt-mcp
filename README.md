@@ -20,6 +20,7 @@ Read from files whose paths come from the environment:
 | `trakt_movie_ratings` | Ratings 1-10 (half-stars land on odd numbers) |
 | `trakt_watchlist` | Planned watches |
 | `trakt_watched_shows` | Series with play counts and last-watched date |
+| `trakt_up_next` | Next unwatched episode per show, every show in one call |
 | `trakt_search` | Resolve a name to a `trakt_id` before writing |
 | `trakt_rate_movie` | Rate by title; takes stars (0.5-5) |
 | `trakt_mark_watched` | Log a watch on a date (or `unknown`); twice records a rewatch |

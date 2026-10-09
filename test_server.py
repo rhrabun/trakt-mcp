@@ -58,6 +58,32 @@ def test_stats_excludes_the_unknown_date_marker_from_years():
     assert out["unknown_date_movies"] == 1
 
 
+def test_up_next_extracts_the_next_episode_and_skips_finished():
+    def fake_request(method, path, body=None, retry=True):
+        assert path.startswith("/sync/progress/watched")
+        assert "hide_completed=true" in path
+        return 200, [
+            {
+                "show": {"title": "S", "year": 2020, "ids": {"trakt": 5}},
+                "progress": {
+                    "aired": 10,
+                    "completed": 3,
+                    "last_watched_at": "2026-01-01T00:00:00.000Z",
+                    "next_episode": {"season": 2, "number": 1, "title": "E", "ids": {"trakt": 99}},
+                },
+            },
+            {
+                "show": {"title": "Done", "year": 2019, "ids": {"trakt": 6}},
+                "progress": {"aired": 10, "completed": 10, "next_episode": None},
+            },
+        ]
+
+    server._request = fake_request
+    out = json.loads(server.trakt_up_next())
+    assert out["count"] == 1
+    assert out["shows"][0]["next_episode"] == {"season": 2, "number": 1, "title": "E", "trakt_id": 99}
+
+
 def test_watched_at_is_normalised_to_a_timestamp():
     assert _norm_watched_at("2026-09-10") == "2026-09-10T10:00:00.000Z"
     assert _norm_watched_at("2026-09-10T12:00:00.000Z") == "2026-09-10T12:00:00.000Z"
