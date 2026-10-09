@@ -1,3 +1,5 @@
+import json
+
 import server
 from server import (
     _expires_at,
@@ -33,6 +35,27 @@ def test_rate_movie_rejects_out_of_range_stars():
     # 0.3 -> round(0.6) = 1 and 5.2 -> round(10.4) = 10 must still be rejected.
     assert "between 0.5 and 5" in trakt_rate_movie("dummy", 0.3)
     assert "between 0.5 and 5" in trakt_rate_movie("dummy", 5.2)
+
+
+def test_stats_excludes_the_unknown_date_marker_from_years():
+    def fake_request(method, path, body=None, retry=True):
+        if "watched/movies" in path:
+            return 200, [
+                {
+                    "movie": {"title": "Dated", "year": 2020, "ids": {"trakt": 1}},
+                    "last_watched_at": "2026-05-01T00:00:00.000Z",
+                },
+                {
+                    "movie": {"title": "Undated", "year": 1999, "ids": {"trakt": 2}},
+                    "last_watched_at": "1970-01-01T00:00:00.000Z",
+                },
+            ]
+        return 200, []
+
+    server._request = fake_request
+    out = json.loads(server.trakt_stats())
+    assert out["years_covered"] == ["2026"]
+    assert out["unknown_dates"] == 1
 
 
 def test_watched_at_is_normalised_to_a_timestamp():

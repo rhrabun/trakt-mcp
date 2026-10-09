@@ -363,7 +363,15 @@ def trakt_stats() -> str:
         data[key] = rows
     movies = _movies(data["watched"])
     ratings = [m["rating"] for m in _movies(data["rated"]) if m.get("rating")]
-    years = sorted({m["watched_at"][:4] for m in movies if m.get("watched_at")})
+    # Trakt stores an undated watch as 1970-01-01; it is not a viewing year.
+    undated = [m for m in movies if (m.get("watched_at") or "").startswith("1970-01-01")]
+    years = sorted(
+        {
+            m["watched_at"][:4]
+            for m in movies
+            if m.get("watched_at") and not m["watched_at"].startswith("1970-01-01")
+        }
+    )
     return json.dumps(
         {
             "movies_watched": len(movies),
@@ -372,6 +380,7 @@ def trakt_stats() -> str:
             "watchlist": len(data["watchlist"] or []),
             "shows_watched": len(data["shows"] or []),
             "years_covered": years,
+            "unknown_dates": len(undated),
         },
         indent=1,
     )
