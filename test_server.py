@@ -55,7 +55,7 @@ def test_stats_excludes_the_unknown_date_marker_from_years():
     server._request = fake_request
     out = json.loads(server.trakt_stats())
     assert out["years_covered"] == ["2026"]
-    assert out["unknown_dates"] == 1
+    assert out["unknown_date_movies"] == 1
 
 
 def test_watched_at_is_normalised_to_a_timestamp():

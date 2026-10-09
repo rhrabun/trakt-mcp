@@ -380,7 +380,7 @@ def trakt_stats() -> str:
             "watchlist": len(data["watchlist"] or []),
             "shows_watched": len(data["shows"] or []),
             "years_covered": years,
-            "unknown_dates": len(undated),
+            "unknown_date_movies": len(undated),
         },
         indent=1,
     )
