@@ -101,6 +101,17 @@ def _request(method: str, path: str, body: dict | None = None, retry: bool = Tru
         return 0, f"request failed: {str(e)[:400]}"
 
 
+# Trakt stamps a watch with no date as 1970-01-01. That is not a viewing date, so it is reported
+# as no date and never sorts or counts as one.
+UNKNOWN_DATE = "1970-01-01"
+
+
+def _when(value: str | None) -> str | None:
+    if not value or value.startswith(UNKNOWN_DATE):
+        return None
+    return value
+
+
 def _movies(rows: list) -> list[dict]:
     if not isinstance(rows, list):
         return []
@@ -113,7 +124,7 @@ def _movies(rows: list) -> list[dict]:
                 "year": m.get("year"),
                 "trakt_id": (m.get("ids") or {}).get("trakt"),
                 "rated_at": r.get("rated_at"),
-                "watched_at": r.get("last_watched_at") or r.get("watched_at"),
+                "watched_at": _when(r.get("last_watched_at") or r.get("watched_at")),
                 "rating": r.get("rating"),
             }
         )
@@ -125,16 +136,16 @@ def _scrub(d: dict) -> dict:
     return {k: v for k, v in d.items() if v not in (None, "", [], {})}
 
 
-def _find_movie(title: str, year: int | None = None) -> dict | None:
-    # ponytail: naive title match, best of 10. If a wrong film ever gets rated,
-    # switch to requiring a trakt_id from trakt_search instead of a title.
+def _find(kind: str, title: str, year: int | None = None) -> dict | None:
+    # ponytail: naive title match, best of 10. If a wrong item ever gets written,
+    # switch to requiring an id from trakt_search instead of a title.
     query = urllib.parse.quote(title)
-    status, rows = _request("GET", f"/search/movie?query={query}&limit=10")
+    status, rows = _request("GET", f"/search/{kind}?query={query}&limit=10")
     if status != 200 or not rows:
         return None
     best = None
     for row in rows:
-        m = row.get("movie") or {}
+        m = row.get(kind) or {}
         exact = (m.get("title") or "").strip().lower() == title.strip().lower()
         year_ok = year is None or m.get("year") == year
         if exact and year_ok:
@@ -201,11 +212,7 @@ def trakt_watched_shows(limit: int = 300) -> str:
                     "year": s.get("year"),
                     "trakt_id": (s.get("ids") or {}).get("trakt"),
                     "plays": r.get("plays"),
-                    "episodes": sum(
-                        len(season.get("episodes") or []) for season in (r.get("seasons") or [])
-                    )
-                    or None,
-                    "last_watched_at": r.get("last_watched_at"),
+                    "last_watched_at": _when(r.get("last_watched_at")),
                 }
             )
         )
@@ -215,8 +222,10 @@ def trakt_watched_shows(limit: int = 300) -> str:
 
 @mcp.tool()
 def trakt_up_next(limit: int = 100, include_completed: bool = False) -> str:
-    """The next unwatched episode for each show, newest activity first. One call
-    covers every show. Set include_completed to also list finished shows."""
+    """The next unwatched episode for each show, one call for the whole account.
+    Ordered with shows you have already started first and fewest episodes left first,
+    so the nearest thing to finish is on top; unstarted shows come last. Set
+    include_completed to also list finished shows."""
     params = [f"limit={limit}"] if limit else []
     if not include_completed:
         params.append("hide_completed=true")
@@ -239,7 +248,7 @@ def trakt_up_next(limit: int = 100, include_completed: bool = False) -> str:
                     "trakt_id": (show.get("ids") or {}).get("trakt"),
                     "aired": prog.get("aired"),
                     "completed": prog.get("completed"),
-                    "last_watched_at": prog.get("last_watched_at"),
+                    "last_watched_at": _when(prog.get("last_watched_at")),
                     "next_episode": (
                         _scrub(
                             {
@@ -255,7 +264,13 @@ def trakt_up_next(limit: int = 100, include_completed: bool = False) -> str:
                 }
             )
         )
-    shows.sort(key=lambda s: s.get("last_watched_at") or "", reverse=True)
+    shows.sort(
+        key=lambda s: (
+            s.get("completed") == 0,
+            (s.get("aired") or 0) - (s.get("completed") or 0),
+            s.get("title") or "",
+        )
+    )
     return json.dumps({"count": len(shows), "shows": shows}, indent=1)
 
 
@@ -284,26 +299,24 @@ def trakt_search(query: str, kind: str = "movie") -> str:
     return json.dumps({"query": query, "results": results}, indent=1)
 
 
-@mcp.tool()
-def trakt_rate_movie(title: str, stars: float, year: int | None = None) -> str:
-    """Rate a movie the account has watched. stars is a 0.5 to 5 scale
-    (converted to Trakt's 1-10 automatically). Confirms which film it matched."""
+def _rate(kind: str, title: str, stars: float, year: int | None) -> str:
+    """Shared by both rate tools. Stars are doubled to Trakt's stored 1-10 integer."""
     if not 0.5 <= stars <= 5:
         return json.dumps({"error": "stars must be between 0.5 and 5"})
-    movie = _find_movie(title, year)
-    if not movie:
-        return json.dumps({"error": f"no movie matched {title!r}", "hint": "call trakt_search"})
+    item = _find(kind, title, year)
+    if not item:
+        return json.dumps({"error": f"no {kind} matched {title!r}", "hint": "call trakt_search"})
     rating = round(stars * 2)
     status, body = _request(
         "POST",
         "/sync/ratings",
-        {"movies": [{"ids": {"trakt": movie["ids"]["trakt"]}, "rating": rating}]},
+        {f"{kind}s": [{"ids": {"trakt": item["ids"]["trakt"]}, "rating": rating}]},
     )
     return json.dumps(
         {
             "ok": status in (200, 201),
-            "matched": f"{movie.get('title')} ({movie.get('year')})",
-            "trakt_id": movie["ids"]["trakt"],
+            "matched": f"{item.get('title')} ({item.get('year')})",
+            "trakt_id": item["ids"]["trakt"],
             "stars": stars,
             "trakt_rating": rating,
             "response": body,
@@ -313,10 +326,24 @@ def trakt_rate_movie(title: str, stars: float, year: int | None = None) -> str:
 
 
 @mcp.tool()
+def trakt_rate_movie(title: str, stars: float, year: int | None = None) -> str:
+    """Rate a movie the account has watched. stars is a 0.5 to 5 scale
+    (converted to Trakt's 1-10 automatically). Confirms which film it matched."""
+    return _rate("movie", title, stars, year)
+
+
+@mcp.tool()
+def trakt_rate_show(title: str, stars: float, year: int | None = None) -> str:
+    """Rate a show. stars is a 0.5 to 5 scale (converted to Trakt's 1-10 automatically).
+    Ratings are per show, not per episode."""
+    return _rate("show", title, stars, year)
+
+
+@mcp.tool()
 def trakt_mark_watched(title: str, watched_at: str, year: int | None = None) -> str:
     """Mark a movie as watched on a date. watched_at is YYYY-MM-DD, or "unknown"
     to mark it watched with no specific date. Send the same film twice to record a rewatch."""
-    movie = _find_movie(title, year)
+    movie = _find("movie", title, year)
     if not movie:
         return json.dumps({"error": f"no movie matched {title!r}", "hint": "call trakt_search"})
     status, body = _request(
@@ -342,32 +369,127 @@ def trakt_mark_watched(title: str, watched_at: str, year: int | None = None) -> 
     )
 
 
-@mcp.tool()
-def trakt_watchlist_add(title: str, year: int | None = None) -> str:
-    """Add a movie to the account's Trakt watchlist."""
-    movie = _find_movie(title, year)
-    if not movie:
-        return json.dumps({"error": f"no movie matched {title!r}", "hint": "call trakt_search"})
-    status, body = _request("POST", "/sync/watchlist", {"movies": [{"ids": {"trakt": movie["ids"]["trakt"]}}]})
-    return json.dumps(
-        {"ok": status in (200, 201), "matched": f"{movie.get('title')} ({movie.get('year')})", "response": body},
-        indent=1,
-    )
+def _watched_episode_numbers(show_id: int, season: int):
+    """Episode numbers of one season that already carry a play, or (None, error).
+
+    /sync/watched/shows reports counts only (no seasons/episodes), so play-level history is
+    the source that answers this. Paged at 100 rows.
+    """
+    found = set()
+    for page in range(1, 61):
+        status, rows = _request("GET", f"/sync/history/shows/{show_id}?limit=100&page={page}")
+        if status != 200:
+            return None, f"history read failed ({status}): {rows}"
+        if not rows:
+            break
+        for row in rows:
+            ep = row.get("episode") or {}
+            if ep.get("season") == season:
+                found.add(ep.get("number"))
+        if len(rows) < 100:
+            break
+    return found, None
 
 
 @mcp.tool()
-def trakt_watchlist_remove(title: str, year: int | None = None) -> str:
-    """Remove a movie from the account's Trakt watchlist."""
-    movie = _find_movie(title, year)
-    if not movie:
-        return json.dumps({"error": f"no movie matched {title!r}", "hint": "call trakt_search"})
+def trakt_mark_season_watched(
+    title: str, season: int, watched_at: str = "unknown", year: int | None = None
+) -> str:
+    """Mark every aired episode of one season as watched, skipping episodes already on the
+    account (posting one twice records a duplicate play). watched_at is YYYY-MM-DD or
+    "unknown". Call once per season to fill in a whole series."""
+    show = _find("show", title, year)
+    if not show:
+        return json.dumps({"error": f"no show matched {title!r}", "hint": "call trakt_search"})
+    show_id = show["ids"]["trakt"]
+    status, seasons = _request("GET", f"/shows/{show_id}/seasons?extended=full,episodes")
+    if status != 200:
+        return json.dumps({"error": status, "detail": seasons})
+    wanted = next((s for s in (seasons or []) if s.get("number") == season), None)
+    if not wanted:
+        return json.dumps({"error": f"{show.get('title')} has no season {season}"})
+    aired = wanted.get("aired_episodes") or 0
+    episodes = [e["number"] for e in (wanted.get("episodes") or [])][:aired]
+    if not episodes:
+        return json.dumps({"error": f"season {season} has no aired episodes yet"})
+    already, err = _watched_episode_numbers(show_id, season)
+    if err:
+        return json.dumps({"error": err})
+    todo = [n for n in episodes if n not in already]
+    if not todo:
+        return json.dumps(
+            {
+                "ok": True,
+                "matched": show.get("title"),
+                "season": season,
+                "added": 0,
+                "already_watched": len(already),
+                "aired": aired,
+            },
+            indent=1,
+        )
     status, body = _request(
-        "POST", "/sync/watchlist/remove", {"movies": [{"ids": {"trakt": movie["ids"]["trakt"]}}]}
+        "POST",
+        "/sync/history",
+        {
+            "shows": [
+                {
+                    "ids": {"trakt": show_id},
+                    "seasons": [
+                        {
+                            "number": season,
+                            "episodes": [
+                                {"number": n, "watched_at": _norm_watched_at(watched_at)}
+                                for n in todo
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
     )
+    # Read the season back: an accepted post is not proof the plays are there.
+    now, err = _watched_episode_numbers(show_id, season)
     return json.dumps(
-        {"ok": status in (200, 201), "matched": f"{movie.get('title')} ({movie.get('year')})", "response": body},
+        {
+            "ok": status in (200, 201) and not err and set(episodes) <= set(now or ()),
+            "matched": f"{show.get('title')} ({show.get('year')})",
+            "season": season,
+            "added": len(todo),
+            "already_watched": len(already),
+            "aired": aired,
+            "recorded_now": len(set(episodes) & set(now or ())) if not err else None,
+            "response": body,
+        },
         indent=1,
     )
+
+
+def _watchlist(kind: str, title: str, year: int | None, action: str) -> str:
+    """Shared by the watchlist add and remove tools; they differ only by path."""
+    if kind not in ("movie", "show"):
+        return json.dumps({"error": "kind must be 'movie' or 'show'"})
+    item = _find(kind, title, year)
+    if not item:
+        return json.dumps({"error": f"no {kind} matched {title!r}", "hint": "call trakt_search"})
+    path = "/sync/watchlist" if action == "add" else "/sync/watchlist/remove"
+    status, body = _request("POST", path, {f"{kind}s": [{"ids": {"trakt": item["ids"]["trakt"]}}]})
+    return json.dumps(
+        {"ok": status in (200, 201), "matched": f"{item.get('title')} ({item.get('year')})", "response": body},
+        indent=1,
+    )
+
+
+@mcp.tool()
+def trakt_watchlist_add(title: str, year: int | None = None, kind: str = "movie") -> str:
+    """Add a movie or show to the account's Trakt watchlist. kind is 'movie' or 'show'."""
+    return _watchlist(kind, title, year, "add")
+
+
+@mcp.tool()
+def trakt_watchlist_remove(title: str, year: int | None = None, kind: str = "movie") -> str:
+    """Remove a movie or show from the account's Trakt watchlist. kind is 'movie' or 'show'."""
+    return _watchlist(kind, title, year, "remove")
 
 
 @mcp.tool()
@@ -409,15 +531,9 @@ def trakt_stats() -> str:
         data[key] = rows
     movies = _movies(data["watched"])
     ratings = [m["rating"] for m in _movies(data["rated"]) if m.get("rating")]
-    # Trakt stores an undated watch as 1970-01-01; it is not a viewing year.
-    undated = [m for m in movies if (m.get("watched_at") or "").startswith("1970-01-01")]
-    years = sorted(
-        {
-            m["watched_at"][:4]
-            for m in movies
-            if m.get("watched_at") and not m["watched_at"].startswith("1970-01-01")
-        }
-    )
+    # _movies already reports an undated watch as no date.
+    years = sorted({m["watched_at"][:4] for m in movies if m.get("watched_at")})
+    undated = [m for m in movies if not m.get("watched_at")]
     return json.dumps(
         {
             "movies_watched": len(movies),

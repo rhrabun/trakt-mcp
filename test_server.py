@@ -6,6 +6,7 @@ from server import (
     _movies,
     _norm_watched_at,
     _scrub,
+    _when,
     trakt_rate_movie,
 )
 
@@ -17,7 +18,7 @@ def test_watched_at_unknown_and_released_pass_through():
 
 def test_rate_movie_doubles_stars_to_trakt_rating():
     # 4.5 stars must go out as 9, not 4 (Trakt truncates a half value silently).
-    server._find_movie = lambda title, year=None: {"title": "X", "year": 2000, "ids": {"trakt": 1}}
+    server._find = lambda kind, title, year=None: {"title": "X", "year": 2000, "ids": {"trakt": 1}}
     sent = {}
 
     def fake_request(method, path, body=None, retry=True):
@@ -82,6 +83,83 @@ def test_up_next_extracts_the_next_episode_and_skips_finished():
     out = json.loads(server.trakt_up_next())
     assert out["count"] == 1
     assert out["shows"][0]["next_episode"] == {"season": 2, "number": 1, "title": "E", "trakt_id": 99}
+
+
+def test_when_reports_the_unknown_marker_as_no_date():
+    assert _when("1970-01-01T00:00:00.000Z") is None
+    assert _when(None) is None
+    assert _when("") is None
+    assert _when("2026-09-25T10:00:00.000Z") == "2026-09-25T10:00:00.000Z"
+
+
+def test_up_next_orders_started_shows_first_and_drops_the_marker():
+    def fake_request(method, path, body=None, retry=True):
+        return 200, [
+            {
+                "show": {"title": "Backlog", "year": 1, "ids": {"trakt": 1}},
+                "progress": {"aired": 10, "completed": 2,
+                             "last_watched_at": "1970-01-01T00:00:00.000Z",
+                             "next_episode": {"season": 1, "number": 3, "ids": {"trakt": 30}}},
+            },
+            {
+                "show": {"title": "Nearly done", "year": 2, "ids": {"trakt": 2}},
+                "progress": {"aired": 10, "completed": 9,
+                             "next_episode": {"season": 1, "number": 10, "ids": {"trakt": 31}}},
+            },
+            {
+                "show": {"title": "Fresh", "year": 3, "ids": {"trakt": 3}},
+                "progress": {"aired": 5, "completed": 0,
+                             "next_episode": {"season": 1, "number": 1, "ids": {"trakt": 32}}},
+            },
+        ]
+
+    server._request = fake_request
+    out = json.loads(server.trakt_up_next())
+    assert [s["title"] for s in out["shows"]] == ["Nearly done", "Backlog", "Fresh"]
+    assert "last_watched_at" not in out["shows"][1]
+
+
+def test_mark_season_watched_skips_episodes_already_recorded():
+    server._find = lambda kind, title, year=None: {"title": "S", "year": 2020, "ids": {"trakt": 5}}
+    posted = {}
+
+    def fake_request(method, path, body=None, retry=True):
+        if path.startswith("/shows/5/seasons"):
+            return 200, [
+                {"number": 1, "aired_episodes": 3, "episodes": [{"number": n} for n in (1, 2, 3)]},
+                {"number": 2, "aired_episodes": 0, "episodes": [{"number": n} for n in (1, 2)]},
+            ]
+        if path.startswith("/sync/history/shows/5"):
+            seen = [1, 2, 3] if posted else [1]
+            return 200, [{"episode": {"season": 1, "number": n}} for n in seen]
+        posted.update(body or {})
+        return 200, {"added": {"episodes": 2}}
+
+    server._request = fake_request
+    out = json.loads(server.trakt_mark_season_watched("S", 1))
+    sent = posted["shows"][0]["seasons"][0]["episodes"]
+    assert [e["number"] for e in sent] == [2, 3]
+    assert sent[0]["watched_at"] == "unknown"
+    assert out["added"] == 2 and out["already_watched"] == 1
+    # Reading back the season is what sets ok, not the accepted post.
+    assert out["ok"] is True and out["recorded_now"] == 3
+    again = json.loads(server.trakt_mark_season_watched("S", 1))
+    assert again["added"] == 0 and again["ok"] is True
+
+
+def test_mark_season_watched_refuses_a_season_with_nothing_aired():
+    server._find = lambda kind, title, year=None: {"title": "S", "year": 2020, "ids": {"trakt": 5}}
+    server._request = lambda method, path, body=None, retry=True: (
+        200,
+        [{"number": 2, "aired_episodes": 0, "episodes": [{"number": n} for n in (1, 2)]}],
+    )
+    assert "no aired episodes" in server.trakt_mark_season_watched("S", 2)
+    assert "has no season 9" in server.trakt_mark_season_watched("S", 9)
+
+
+def test_watchlist_rejects_an_unknown_kind():
+    assert "kind must be" in server.trakt_watchlist_add("X", kind="episode")
+    assert "kind must be" in server.trakt_watchlist_remove("X", kind="season")
 
 
 def test_watched_at_is_normalised_to_a_timestamp():
