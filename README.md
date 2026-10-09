@@ -7,10 +7,10 @@ watchlist, series and write access.
 
 Read from files whose paths come from the environment:
 
-- `TRAKT_CLIENT_ID_PATH` (default `trakt_client_id`) - the PKCE app's client id (no client
-  secret exists).
-- `TRAKT_TOKEN_PATH` (default `trakt_token.json`) - OAuth token; refreshed automatically
-  when it is within an hour of expiring, and retried once on a 401.
+- `TRAKT_CLIENT_ID_PATH` (default `~/.config/trakt/client_id`) - the PKCE app's client id
+  (no client secret exists).
+- `TRAKT_TOKEN_PATH` (default `~/.config/trakt/token.json`) - OAuth token; refreshed
+  automatically when it is within an hour of expiring, and retried once on a 401.
 
 ## Tools
 
@@ -22,7 +22,7 @@ Read from files whose paths come from the environment:
 | `trakt_watched_shows` | Series with play counts and last-watched date |
 | `trakt_search` | Resolve a name to a `trakt_id` before writing |
 | `trakt_rate_movie` | Rate by title; takes stars (0.5-5) |
-| `trakt_mark_watched` | Log a watch on a date; twice records a rewatch |
+| `trakt_mark_watched` | Log a watch on a date (or `unknown`); twice records a rewatch |
 | `trakt_watchlist_add` / `trakt_watchlist_remove` | Watchlist edits |
 | `trakt_recommendations` | Trakt's own suggestions from the history |
 | `trakt_stats` | Counts and average rating |
