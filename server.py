@@ -14,8 +14,12 @@ import urllib.request
 from mcp.server import MCPServer
 
 API = "https://api.trakt.tv"
-CLIENT_ID_PATH = os.environ.get("TRAKT_CLIENT_ID_PATH", "trakt_client_id")
-TOKEN_PATH = os.environ.get("TRAKT_TOKEN_PATH", "trakt_token.json")
+CLIENT_ID_PATH = os.path.expanduser(
+    os.environ.get("TRAKT_CLIENT_ID_PATH", "~/.config/trakt/client_id")
+)
+TOKEN_PATH = os.path.expanduser(
+    os.environ.get("TRAKT_TOKEN_PATH", "~/.config/trakt/token.json")
+)
 
 mcp = MCPServer("trakt")
 
@@ -30,9 +34,12 @@ def _client_id() -> str:
 
 
 def _save_token(token: dict) -> None:
-    with open(TOKEN_PATH, "w") as f:
+    # Atomic: a torn write here loses the rotated refresh-token pair.
+    tmp = TOKEN_PATH + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(token, f)
-    os.chmod(TOKEN_PATH, 0o600)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, TOKEN_PATH)
 
 
 def _base_headers() -> dict:
@@ -138,7 +145,8 @@ def _find_movie(title: str, year: int | None = None) -> dict | None:
 
 
 def _norm_watched_at(value: str) -> str:
-    if "T" in value:
+    # Trakt accepts "unknown" (watched, no date) and "released" (episodes only) verbatim.
+    if value in ("unknown", "released") or "T" in value:
         return value
     return f"{value}T10:00:00.000Z"
 
@@ -260,8 +268,8 @@ def trakt_rate_movie(title: str, stars: float, year: int | None = None) -> str:
 
 @mcp.tool()
 def trakt_mark_watched(title: str, watched_at: str, year: int | None = None) -> str:
-    """Mark a movie as watched on a date. watched_at is YYYY-MM-DD.
-    Send the same film twice to record a rewatch."""
+    """Mark a movie as watched on a date. watched_at is YYYY-MM-DD, or "unknown"
+    to mark it watched with no specific date. Send the same film twice to record a rewatch."""
     movie = _find_movie(title, year)
     if not movie:
         return json.dumps({"error": f"no movie matched {title!r}", "hint": "call trakt_search"})
@@ -341,20 +349,28 @@ def trakt_recommendations(limit: int = 20) -> str:
 def trakt_stats() -> str:
     """Counts for the Trakt account, computed from the raw lists because
     Trakt's own /users/me/stats endpoint can return an empty body."""
-    _, watched = _request("GET", "/sync/watched/movies?limit=1000")
-    _, rated = _request("GET", "/users/me/ratings/movies?limit=1000")
-    _, watchlist = _request("GET", "/users/me/watchlist/movies?limit=1000")
-    _, shows = _request("GET", "/sync/watched/shows?limit=1000")
-    movies = _movies(watched or [])
-    ratings = [m["rating"] for m in _movies(rated or []) if m.get("rating")]
+    sources = {
+        "watched": "/sync/watched/movies?limit=1000",
+        "rated": "/users/me/ratings/movies?limit=1000",
+        "watchlist": "/users/me/watchlist/movies?limit=1000",
+        "shows": "/sync/watched/shows?limit=1000",
+    }
+    data = {}
+    for key, path in sources.items():
+        status, rows = _request("GET", path)
+        if status != 200:
+            return json.dumps({"error": f"Trakt request failed ({status})", "detail": rows})
+        data[key] = rows
+    movies = _movies(data["watched"])
+    ratings = [m["rating"] for m in _movies(data["rated"]) if m.get("rating")]
     years = sorted({m["watched_at"][:4] for m in movies if m.get("watched_at")})
     return json.dumps(
         {
             "movies_watched": len(movies),
             "movies_rated": len(ratings),
             "average_rating_10": round(sum(ratings) / len(ratings), 2) if ratings else None,
-            "watchlist": len(watchlist or []),
-            "shows_watched": len(shows or []),
+            "watchlist": len(data["watchlist"] or []),
+            "shows_watched": len(data["shows"] or []),
             "years_covered": years,
         },
         indent=1,

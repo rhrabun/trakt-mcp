@@ -1,3 +1,4 @@
+import server
 from server import (
     _expires_at,
     _movies,
@@ -5,6 +6,27 @@ from server import (
     _scrub,
     trakt_rate_movie,
 )
+
+
+def test_watched_at_unknown_and_released_pass_through():
+    assert _norm_watched_at("unknown") == "unknown"
+    assert _norm_watched_at("released") == "released"
+
+
+def test_rate_movie_doubles_stars_to_trakt_rating():
+    # 4.5 stars must go out as 9, not 4 (Trakt truncates a half value silently).
+    server._find_movie = lambda title, year=None: {"title": "X", "year": 2000, "ids": {"trakt": 1}}
+    sent = {}
+
+    def fake_request(method, path, body=None, retry=True):
+        sent["rating"] = body["movies"][0]["rating"]
+        return 200, {}
+
+    server._request = fake_request
+    trakt_rate_movie("X", 4.5)
+    assert sent["rating"] == 9
+    trakt_rate_movie("X", 0.5)
+    assert sent["rating"] == 1
 
 
 def test_rate_movie_rejects_out_of_range_stars():
