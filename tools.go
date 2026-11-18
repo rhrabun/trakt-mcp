@@ -659,7 +659,7 @@ func (c *Client) markSeasonTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 			}
 		}
 		return nil, MarkSeasonOutput{
-			OK:             true,
+			OK:             recordedNow == len(numbers),
 			Matched:        label(show),
 			Season:         in.Season,
 			Added:          0,
@@ -696,7 +696,7 @@ func (c *Client) markSeasonTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 		}
 	}
 	return nil, MarkSeasonOutput{
-		OK:             true,
+		OK:             recordedNow == len(numbers),
 		Matched:        label(show),
 		Season:         in.Season,
 		Added:          len(todo),

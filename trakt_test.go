@@ -255,6 +255,49 @@ func TestMarkSeasonWatchedSkipsEpisodesAlreadyRecorded(t *testing.T) {
 	}
 }
 
+func TestMarkSeasonReportsAPartialWriteAsNotOK(t *testing.T) {
+	posted := false
+	c := &Client{baseURL: "http://test", clientIDPath: "unused", tokenPath: "unused"}
+	c.call = func(_ context.Context, method, path string, body any) (int, []byte, error) {
+		switch {
+		case path == "/search/show?query=S&limit=10":
+			return 200, []byte(`[{"show":{"title":"S","year":2020,"ids":{"trakt":5}}}]`), nil
+		case path == "/shows/5/seasons?extended=full,episodes":
+			return 200, []byte(`[{"number":1,"aired_episodes":3,"episodes":[{"number":1},{"number":2},{"number":3}]}]`), nil
+		case strings.HasPrefix(path, "/sync/history/shows/5"):
+			seen := []int{1}
+			if posted {
+				seen = []int{1, 2}
+			}
+			rows := make([]historyRow, 0, len(seen))
+			for _, number := range seen {
+				var row historyRow
+				row.Episode.Season = 1
+				row.Episode.Number = number
+				rows = append(rows, row)
+			}
+			raw, err := json.Marshal(rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return 200, raw, nil
+		case path == "/sync/history":
+			posted = true
+			return 201, []byte(`{"added":{"episodes":2}}`), nil
+		}
+		t.Fatalf("unscripted call: %s %s", method, path)
+		return 0, nil, nil
+	}
+
+	_, out, err := c.markSeasonTool(context.Background(), nil, MarkSeasonInput{Title: "S", Season: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.OK || out.RecordedNow != 2 || out.Added != 2 || out.Aired != 3 {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
 func TestMarkSeasonWatchedRefusesASeasonWithNothingAired(t *testing.T) {
 	c, _ := scripted(t,
 		okRule("GET /search/show", `[{"show":{"title":"S","year":2020,"ids":{"trakt":5}}}]`),

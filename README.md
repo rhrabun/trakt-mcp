@@ -35,9 +35,10 @@ so concurrent tool calls cannot clobber a rotated token pair.
 
 Tools return typed JSON in `structuredContent` as well as text content. Optional
 arguments publish their defaults in the input schema (`limit`, `kind`,
-`include_completed`, `watched_at`). Successful write results carry `ok: true`; a
-failed call sets `isError` with the reason in the text, including the Trakt
-status and response body.
+`include_completed`, `watched_at`). Write results carry `ok`;
+`trakt_mark_season_watched` sets it only when every aired episode is verified
+(`recorded_now == aired`). A failed call sets `isError` with the reason in the
+text, including the Trakt status and response body.
 
 ## Notes
 
