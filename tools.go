@@ -10,38 +10,71 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// inputSchema infers the input schema and publishes argument defaults, which
+// jsonschema struct tags cannot express. The SDK validates provided schemas at
+// AddTool time, so a bad default panics during startup, not on first call.
+func inputSchema[T any](defaults map[string]any) *jsonschema.Schema {
+	schema, err := jsonschema.For[T](nil)
+	if err != nil {
+		panic(fmt.Sprintf("building the input schema for %T: %v", *new(T), err))
+	}
+	for name, value := range defaults {
+		property, ok := schema.Properties[name]
+		if !ok {
+			panic(fmt.Sprintf("input schema for %T has no %q property", *new(T), name))
+		}
+		property.Default = mustJSON(value)
+	}
+	return schema
+}
+
+func mustJSON(value any) json.RawMessage {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
 func addTools(s *mcp.Server, c *Client) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "trakt_watched_movies",
+		Name:        "trakt_watched_movies",
+		InputSchema: inputSchema[LimitInput](map[string]any{"limit": 1000}),
 		Description: "Movies the account has watched, newest first: title, year, trakt_id, watched date. " +
 			"Use this to read the account's film taste before recommending anything. limit defaults to 1000.",
 	}, c.watchedMoviesTool)
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "trakt_movie_ratings",
+		Name:        "trakt_movie_ratings",
+		InputSchema: inputSchema[LimitInput](map[string]any{"limit": 1000}),
 		Description: "The account's movie ratings on Trakt, 1-10 (half-star ratings land on odd numbers). " +
 			"Use alongside trakt_watched_movies to judge what the account likes. limit defaults to 1000.",
 	}, c.movieRatingsTool)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "trakt_watchlist",
+		InputSchema: inputSchema[LimitInput](map[string]any{"limit": 1000}),
 		Description: "Movies on the account's Trakt watchlist (planned watches). limit defaults to 1000.",
 	}, c.watchlistTool)
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "trakt_watched_shows",
+		Name:        "trakt_watched_shows",
+		InputSchema: inputSchema[LimitInput](map[string]any{"limit": 300}),
 		Description: "TV series the account has watched, with episode counts and last-watched date. " +
 			"Trakt covers series properly. limit defaults to 300.",
 	}, c.watchedShowsTool)
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "trakt_up_next",
+		Name:        "trakt_up_next",
+		InputSchema: inputSchema[UpNextInput](map[string]any{"limit": 100, "include_completed": false}),
 		Description: "The next unwatched episode for each show, one call for the whole account. " +
 			"Ordered with shows you have already started first and fewest episodes left first, so the " +
 			"nearest thing to finish is on top; unstarted shows come last. Set include_completed to " +
 			"also list finished shows. limit defaults to 100.",
 	}, c.upNextTool)
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "trakt_search",
+		Name:        "trakt_search",
+		InputSchema: inputSchema[SearchInput](map[string]any{"kind": "movie"}),
 		Description: "Search Trakt for a movie or show. kind is 'movie' or 'show'. " +
 			"Use to resolve a name to its trakt_id before any write.",
 	}, c.searchTool)
@@ -61,21 +94,25 @@ func addTools(s *mcp.Server, c *Client) {
 			"to mark it watched with no specific date. Send the same film twice to record a rewatch.",
 	}, c.markWatchedTool)
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "trakt_mark_season_watched",
+		Name:        "trakt_mark_season_watched",
+		InputSchema: inputSchema[MarkSeasonInput](map[string]any{"watched_at": "unknown"}),
 		Description: `Mark every aired episode of one season as watched, skipping episodes already on ` +
 			`the account (posting one twice records a duplicate play). watched_at is YYYY-MM-DD or ` +
 			`"unknown" (default). Call once per season to fill in a whole series.`,
 	}, c.markSeasonTool)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "trakt_watchlist_add",
+		InputSchema: inputSchema[WatchlistInput](map[string]any{"kind": "movie"}),
 		Description: "Add a movie or show to the account's Trakt watchlist. kind is 'movie' or 'show'.",
 	}, c.watchlistAddTool)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "trakt_watchlist_remove",
+		InputSchema: inputSchema[WatchlistInput](map[string]any{"kind": "movie"}),
 		Description: "Remove a movie or show from the account's Trakt watchlist. kind is 'movie' or 'show'.",
 	}, c.watchlistRemoveTool)
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "trakt_recommendations",
+		Name:        "trakt_recommendations",
+		InputSchema: inputSchema[LimitInput](map[string]any{"limit": 20}),
 		Description: "Trakt's own suggestions based on the account's history: title, year, trakt_id, overview. " +
 			"limit defaults to 20.",
 	}, c.recommendationsTool)
@@ -173,6 +210,7 @@ type RateInput struct {
 }
 
 type RateOutput struct {
+	OK          bool    `json:"ok"`
 	Matched     string  `json:"matched"`
 	TraktID     int64   `json:"trakt_id"`
 	Stars       float64 `json:"stars"`
@@ -187,6 +225,7 @@ type MarkWatchedInput struct {
 }
 
 type MarkWatchedOutput struct {
+	OK        bool   `json:"ok"`
 	Matched   string `json:"matched"`
 	WatchedAt string `json:"watched_at"`
 	Response  any    `json:"response,omitempty"`
@@ -200,6 +239,7 @@ type MarkSeasonInput struct {
 }
 
 type MarkSeasonOutput struct {
+	OK             bool   `json:"ok"`
 	Matched        string `json:"matched"`
 	Season         int    `json:"season"`
 	Added          int    `json:"added"`
@@ -216,6 +256,7 @@ type WatchlistInput struct {
 }
 
 type WatchlistOutput struct {
+	OK       bool   `json:"ok"`
 	Matched  string `json:"matched"`
 	Response any    `json:"response,omitempty"`
 }
@@ -488,6 +529,7 @@ func (c *Client) rate(ctx context.Context, kind string, in RateInput) (*mcp.Call
 		return nil, RateOutput{}, err
 	}
 	return nil, RateOutput{
+		OK:          true,
 		Matched:     label(found),
 		TraktID:     found.IDs.Trakt,
 		Stars:       in.Stars,
@@ -544,6 +586,7 @@ func (c *Client) markWatchedTool(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, MarkWatchedOutput{}, err
 	}
 	return nil, MarkWatchedOutput{
+		OK:        true,
 		Matched:   label(movie),
 		WatchedAt: in.WatchedAt,
 		Response:  anyBody(raw),
@@ -616,6 +659,7 @@ func (c *Client) markSeasonTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 			}
 		}
 		return nil, MarkSeasonOutput{
+			OK:             true,
 			Matched:        label(show),
 			Season:         in.Season,
 			Added:          0,
@@ -652,6 +696,7 @@ func (c *Client) markSeasonTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 		}
 	}
 	return nil, MarkSeasonOutput{
+		OK:             true,
 		Matched:        label(show),
 		Season:         in.Season,
 		Added:          len(todo),
@@ -740,7 +785,7 @@ func (c *Client) editWatchlist(ctx context.Context, action string, in WatchlistI
 	if err := expectWrite(path, status, raw); err != nil {
 		return nil, WatchlistOutput{}, err
 	}
-	return nil, WatchlistOutput{Matched: label(found), Response: anyBody(raw)}, nil
+	return nil, WatchlistOutput{OK: true, Matched: label(found), Response: anyBody(raw)}, nil
 }
 
 type recommendationRow struct {

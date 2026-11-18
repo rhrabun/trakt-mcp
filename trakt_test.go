@@ -76,8 +76,8 @@ func TestRateMovieDoublesStarsToTraktRating(t *testing.T) {
 	)
 	if _, out, err := c.rateMovieTool(context.Background(), nil, RateInput{Title: "X", Stars: 4.5}); err != nil {
 		t.Fatal(err)
-	} else if out.TraktRating != 9 {
-		t.Fatalf("trakt_rating = %d", out.TraktRating)
+	} else if out.TraktRating != 9 || !out.OK {
+		t.Fatalf("out = %+v", out)
 	}
 	if _, _, err := c.rateMovieTool(context.Background(), nil, RateInput{Title: "X", Stars: 0.5}); err != nil {
 		t.Fatal(err)
@@ -242,7 +242,7 @@ func TestMarkSeasonWatchedSkipsEpisodesAlreadyRecorded(t *testing.T) {
 	if episodes[0].WatchedAt != "unknown" {
 		t.Fatalf("watched_at = %q", episodes[0].WatchedAt)
 	}
-	if out.Added != 2 || out.AlreadyWatched != 1 || out.RecordedNow != 3 || out.Aired != 3 {
+	if out.Added != 2 || out.AlreadyWatched != 1 || out.RecordedNow != 3 || out.Aired != 3 || !out.OK {
 		t.Fatalf("out = %+v", out)
 	}
 
@@ -250,7 +250,7 @@ func TestMarkSeasonWatchedSkipsEpisodesAlreadyRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Added != 0 || again.RecordedNow != 3 {
+	if again.Added != 0 || again.RecordedNow != 3 || !again.OK {
 		t.Fatalf("again = %+v", again)
 	}
 }
@@ -378,6 +378,64 @@ func TestServerListsAllToolsWithSchemas(t *testing.T) {
 		if tool.OutputSchema == nil {
 			t.Errorf("%s has no output schema", tool.Name)
 		}
+	}
+}
+
+func TestInputSchemasPublishDefaults(t *testing.T) {
+	ctx := context.Background()
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "trakt", Version: "test"}, nil)
+	addTools(server, client)
+	session := connectInMemory(t, ctx, server)
+	defer session.Close()
+
+	list, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]any{
+		"trakt_watched_movies":      {"limit": 1000.0},
+		"trakt_movie_ratings":       {"limit": 1000.0},
+		"trakt_watchlist":           {"limit": 1000.0},
+		"trakt_watched_shows":       {"limit": 300.0},
+		"trakt_up_next":             {"limit": 100.0, "include_completed": false},
+		"trakt_search":              {"kind": "movie"},
+		"trakt_mark_season_watched": {"watched_at": "unknown"},
+		"trakt_watchlist_add":       {"kind": "movie"},
+		"trakt_watchlist_remove":    {"kind": "movie"},
+		"trakt_recommendations":     {"limit": 20.0},
+	}
+
+	checked := 0
+	for _, tool := range list.Tools {
+		expected, ok := want[tool.Name]
+		if !ok {
+			continue
+		}
+		checked++
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Default any `json:"default"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		for property, value := range expected {
+			if got := schema.Properties[property].Default; !reflect.DeepEqual(got, value) {
+				t.Errorf("%s.%s default = %#v, want %#v", tool.Name, property, got, value)
+			}
+		}
+	}
+	if checked != len(want) {
+		t.Fatalf("checked %d tools, want %d", checked, len(want))
 	}
 }
 

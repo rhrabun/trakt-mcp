@@ -33,9 +33,11 @@ so concurrent tool calls cannot clobber a rotated token pair.
 | `trakt_recommendations` | Trakt's own suggestions from the history |
 | `trakt_stats` | Counts and average rating |
 
-Tools return typed JSON in `structuredContent` as well as text content. A failed
-call sets `isError` with the reason in the text, including the Trakt status and
-response body.
+Tools return typed JSON in `structuredContent` as well as text content. Optional
+arguments publish their defaults in the input schema (`limit`, `kind`,
+`include_completed`, `watched_at`). Successful write results carry `ok: true`; a
+failed call sets `isError` with the reason in the text, including the Trakt
+status and response body.
 
 ## Notes
 
